@@ -1,0 +1,21 @@
+@"
+# Julia
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+Manifest.toml
+
+# Jupyter / Pluto
+.ipynb_checkpoints/
+**/pluto_export/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs
+results/
+"@ | Set-Content .gitignore
