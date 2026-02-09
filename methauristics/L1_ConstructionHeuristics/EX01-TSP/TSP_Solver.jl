@@ -51,10 +51,28 @@ function getDistanceMatrix(coord::Array{Float32,2},dim::Int32)
 end
 
 function main()
-    name, coord, dim = readInstance("tsp_toy.tsp")
+    name, coord, dim = readInstance("toy_slides.tsp")
+    dist = getDistanceMatrix(coord, dim)
+
+    # stampa a schermo
     println(name)
-    dist = getDistanceMatrix(coord,dim)
     println(dist)
+
+    # scrivi su file .txt nella stessa cartella di questo .jl
+    outpath = joinpath(@__DIR__, "results.txt")
+    open(outpath, "w") do io
+        println(io, "Instance name: ", name)
+        println(io, "Dimension: ", dim)
+        println(io, "\nDistance matrix:")
+        for i in 1:dim
+            println(io, join(dist[i, :], " "))
+        end
+    end
+
+    println("Saved results to: ", outpath)
 end
+
+main()
+
 
 main()

@@ -53,7 +53,7 @@ function readInstance(filename)
 end
 
 function main()
-    inst = readInstance("Week01/WeddingData_100_10_50_40.dat")
+    inst = readInstance("WeddingData_20_4_50_25.dat")
     println(inst.G)
 end
 
