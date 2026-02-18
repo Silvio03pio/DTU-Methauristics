@@ -30,23 +30,6 @@ function CTSPSolution(n::Int)
     return CTSPSolution(Int[], 0, falses(n))
 end
 
-
-mutable struct CTSPParams
-    timelimit::Float64
-    K0::Int
-    Kmin::Int
-    Kmax::Int
-end
-
-mutable struct CTSPSolver
-    inst::CTSPInstance
-    params::CTSPParams
-    t0::Float64
-end
-
-@inline elapsedTime(m::CTSPSolver) = time() - m.t0
-
-
 # perturbazione della initial solution
 function perturb_route!(route::Vector{Int}, preds::Vector{Vector{Int}}; K::Int=5)
     n = length(route)
@@ -65,8 +48,6 @@ function perturb_route!(route::Vector{Int}, preds::Vector{Vector{Int}}; K::Int=5
         end
     end
 end
-
-
 
 # ===========================
 # 1) COSTRUISTO matrice PRECEDENZE + COSTI 
@@ -181,27 +162,94 @@ function nearest_neighbor_ctsp(inst::CTSPInstance)
 end
 
 
+# ===========================
+# 4) LOCAL SEARCH (INSERTION) CON PRECEDENZE
+# ===========================
 
-# ===========================
-# 6) 2-opt iterated + time limit
-# ===========================
-function two_opt_local_search(inst::CTSPInstance, route::Vector{Int}; deadline::Float64=Inf)
+# calcolo objective del PATH (non ciclo)
+function compute_objective(cost::AbstractMatrix{<:Integer}, route::Vector{Int})
+    obj = 0
+    for i in 1:length(route)-1
+        obj += Int(cost[route[i], route[i+1]])
+    end
+    return obj
+end
+
+# controllo se una route rispetta tutte le precedenze
+function is_feasible_route(route::Vector{Int}, preds::Vector{Vector{Int}})
+    pos = Dict{Int,Int}()
+    for (i, v) in enumerate(route)
+        pos[v] = i
+    end
+
+    for v in route
+        for p in preds[v]
+            if pos[p] > pos[v]
+                return false
+            end
+        end
+    end
+
+    return true
+end
+
+# Local Search: reinserisco un nodo in un'altra posizione (solo se migliora + resta feasible)
+function insertion_local_search(inst::CTSPInstance, route::Vector{Int})
     best_route = copy(route)
     best_obj = compute_objective(inst.cost, best_route)
 
     improved = true
-    while time() < deadline
+    while improved
+        improved = false
+        n = length(best_route)
+
+        # non muovo start (pos 1) e goal (pos n)
+        for i in 2:n-1
+            for j in 2:n-1
+                i == j && continue
+
+                candidate = copy(best_route)
+                node = candidate[i]
+                deleteat!(candidate, i)
+                insert!(candidate, j, node)
+
+                # controlla feasibility e objective
+                if is_feasible_route(candidate, inst.preds)
+                    cand_obj = compute_objective(inst.cost, candidate)
+
+                    if cand_obj < best_obj
+                        best_obj = cand_obj
+                        best_route = candidate
+                        improved = true
+                        break
+                    end
+                end
+            end
+            improved && break
+        end
+    end
+
+    return best_route, best_obj
+end
+
+# ===========================
+# 6) 2-opt CON PRECEDENZE
+# ===========================
+function two_opt_local_search(inst::CTSPInstance, route::Vector{Int})
+    best_route = copy(route)
+    best_obj = compute_objective(inst.cost, best_route)
+
+    improved = true
+    while improved
         improved = false
         n = length(best_route)
 
         # non tocchiamo start (pos 1) e goal (pos n)
         for i in 2:n-2
-            if time() >= deadline; break; end
-
             for k in i+1:n-1
-                if time() >= deadline; break; end
-
                 candidate = copy(best_route)
+
+                # reverse del segmento [i:k]
                 candidate[i:k] = reverse(candidate[i:k])
 
                 if is_feasible_route(candidate, inst.preds)
@@ -222,98 +270,67 @@ function two_opt_local_search(inst::CTSPInstance, route::Vector{Int}; deadline::
 end
 
 
-
-
-# ===========================
-# 7) perturbation 2-opt 
-# ===========================
-
-function perturbation_2opt(route::Vector{Int}, preds::Vector{Vector{Int}}, K::Int)
-    pert = copy(route)
-    n = length(pert)
-    n <= 4 && return pert
-
-    accepted = 0
-    for _ in 1:K
-        a = rand(2:n-2)
-        b = rand(a+1:n-1)
-
-        cand = copy(pert)
-        cand[a:b] = reverse(cand[a:b])
-
-        if is_feasible_route(cand, preds)
-            pert = cand
-            accepted += 1
-        end
-    end
-
-    # println("Pert accepted: $accepted / $K")
-    return pert
-end
-
-
-
 # ===========================
 # MAIN
 # ===========================
 
 function main()
 
-    # ===========================
-    # 0) scegli istanza (hard-coded)
-    # ===========================
+    # 0) scelgo istanza
     inst_path = joinpath(@__DIR__, "Instances", "Instances", "br17.10.sop")
 
-    # ===========================
     # 1) leggo istanza
-    # ===========================
     name, ub, n, raw_cost = read_instance(inst_path)
 
-    # ===========================
     # 2) costruisco preds e cost pulita
-    # ===========================
     preds, cost = build_preds_and_cost(raw_cost)
 
-    # ===========================
     # 3) creo oggetto istanza CTSP
-    # ===========================
     inst = CTSPInstance(name, ub, n, cost, preds, 1, n)
 
     println("Instance: ", inst.name, " | n=", inst.n, " | UB=", inst.ub)
 
-    # ===========================
     # 4) costruzione NN feasible
-    # ===========================
     sol = nearest_neighbor_ctsp(inst)
 
     println("\n--- Nearest Neighbor ---")
     println("Objective: ", sol.objective)
 
-    # ===========================
-    # 5) ILS (solo 2-opt) con time limit
-    # ===========================
-    time_limit = 60.0  # <-- qui poi lo prenderai da ARGS (terzo parametro)
+    route_best = copy(sol.route)
+    obj_best = sol.objective
 
-    route_best, obj_best = iterated_local_search_2opt(
-        inst, sol.route;
-        time_limit = time_limit,
-        K0  = 3,
-        Kmin = 1,
-        Kmax = 50
-    )
+    
 
-    # ===========================
-    # 6) output finale
-    # ===========================
-    println("\n--- Final solution after ILS (2-opt) ---")
+    # 5) Local search: prima 2-opt (macro), poi insertion (fine tuning)
+    improved = true
+    while improved
+        improved = false
+
+        # 5.1) 2-opt
+        route2, obj2 = two_opt_local_search(inst, route_best)
+        if obj2 < obj_best
+            route_best = route2
+            obj_best = obj2
+            improved = true
+        end
+        #5.2) insertion
+        route3, obj3 = insertion_local_search(inst, route_best)
+        if obj3 < obj_best
+            route_best = route3
+            obj_best = obj3
+            improved = true
+        end 
+    end
+
+    println("\n--- Final solution after LS ---")
     println("Route: ", route_best)
     println("Objective: ", obj_best)
     println("Gap vs UB: ", obj_best - inst.ub)
+    #println("cost:", cost)
+    #println("preds:", preds)
 
 end
 
 main()
-
-
 
 
