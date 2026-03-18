@@ -1,0 +1,413 @@
+using Random
+
+# struct representing a solution (dal file originale)
+mutable struct TSPSolution
+    # we represent a solution as a list of cities.
+    route::Array{Int32,1}
+    # placeholder for the objective value
+    objective::Float32
+
+    # solution default constructor
+    TSPSolution(dim) = new(zeros(Int32,dim),0)
+end
+
+#***** Instance reader *********************************************************
+function readInstance(filename)
+    #open file for reading
+    file = open(filename)
+    #read the name of the instance
+    name = split(readline(file))[2]
+    #The next two lines are not interesting for us. Skip them
+    readline(file);readline(file)
+    #Read the size of the instance (the number of cities)
+    dim = parse(Int32,split(readline(file))[2])
+    #The next two lines are not interesting for us. Skip them
+    readline(file);readline(file)
+    #Create a Matrix (dim ⋅ 2) to hold the coordinates
+    coord = zeros(Float32,dim,2)
+    #Read coordinates
+    for i in 1:dim
+        data = parse.(Float32,split(readline(file)))
+        coord[i,:]=data[2:3]
+    end
+    #Close the file
+    close(file)
+    #return the data we need
+    return name,coord,dim
+end
+
+#***** Creates a distance matrix ***********************************************
+function getDistanceMatrix(coord::Array{Float32,2},dim::Int32)
+    dist = zeros(Float32,dim,dim)
+    for i in 1:dim
+       for j in 1:dim
+            if i!=j
+                dist[i,j]=round(sqrt((coord[i,1]-coord[j,1])^2+(coord[i,2]-coord[j,2])^2),digits=2)
+            end
+        end
+    end
+    return dist
+end
+
+# given a distance matrix, and a list of visited cities
+# returns the city closed to "city"
+function get_nearest_neighbor(dist,visited,city)
+    # variable to keep track of the smallest distance 
+    distance = Inf
+    # variable to keep track of the next city
+    next =0
+    # run through all the cities
+    for i in 1:length(dist[city,:])
+        # if city is not visited and the distance is smaller
+        # than what we have seen
+        if !visited[i] && distance>dist[city,i]
+            # update the best distance and the next city
+            distance = dist[city,i]
+            next = i
+        end
+    end
+
+    #return the next city
+    return next
+end
+
+# Nearest neighbor construction heuristic
+function nearest_neighbor_heuristic(dist,dim)
+    # We initialize the empty solution
+    sol = TSPSolution(dim)
+
+    # keep track of whcih cities have been visited
+    visited = zeros(Bool,dim)
+
+    # we start by assigning the first city and flag it as visited
+    sol.route[1] = 1
+    visited[1] = true
+
+    # we make a loop where i is the index of the last city inserted
+    # since we will be assigning the next (i+1) city, we need to stop at dim-1
+    for i in 1:dim-1
+        # get the ID of the neighor closest to city in position i (the last one we added)
+        j = get_nearest_neighbor(dist, visited, sol.route[i])
+        # assign the neighbor to the solution and flag it as visited
+        sol.route[i+1] = j
+        visited[j]=true
+
+        # update the objective value
+        sol.objective += dist[sol.route[i],sol.route[i+1]]
+    end
+    # we need to remember to add cost between the last ans the first city
+    # since we are building a cycle
+    sol.objective+=dist[sol.route[1],sol.route[end]]
+    
+    return sol
+end
+
+# Struct per tenere traccia delle statistiche
+mutable struct SearchStats
+    iterations::Int
+    improvements::Int
+    time::Float64
+    objective_values::Vector{Float32}
+    
+    SearchStats() = new(0, 0, 0.0, Float32[])
+end
+
+# Calcolo obiettivo con delta evaluation (CORRETTO)
+function compute_delta(route::Vector{Int32}, dist, i::Int, j::Int)
+    n = length(route)
+    a = route[i]
+    b = route[i+1]
+    c = route[j]
+    d = route[j+1]
+    
+    # Delta = (nuovi archi) - (vecchi archi)
+    # Nuovi archi: (a,c) e (b,d)
+    # Vecchi archi: (a,b) e (c,d)
+    return (dist[a,c] + dist[b,d]) - (dist[a,b] + dist[c,d])
+end
+
+# 2-opt move con aggiornamento incrementale dell'obiettivo (CORRETTO)
+function apply_2opt_move!(sol::TSPSolution, i::Int, j::Int, dist)
+    # PRIMA calcola il delta usando il route originale
+    delta = compute_delta(sol.route, dist, i, j)
+    
+    # POI inverti il segmento
+    reverse!(sol.route, i+1, j)
+    
+    # AGGIORNA l'obiettivo
+    sol.objective += delta
+    
+    return sol
+end
+
+# Best improvement 2-opt (CORRETTO)
+function best_improvement_2opt!(sol::TSPSolution, dist, stats::SearchStats)
+    improved = true
+    n = length(sol.route)
+    
+    while improved
+        improved = false
+        best_delta = 0.0f0
+        best_i, best_j = 0, 0
+        
+        # Cerca il miglior miglioramento
+        for i in 1:(n-3)
+            for j in (i+2):(n-1)
+                stats.iterations += 1
+                delta = compute_delta(sol.route, dist, i, j)
+                
+                # CERCHIAMO delta NEGATIVO (miglioramento)
+                if delta < best_delta  # best_delta inizia a 0, quindi delta negativo è migliore
+                    best_delta = delta
+                    best_i, best_j = i, j
+                    improved = true
+                end
+            end
+        end
+        
+        # Applica il miglior miglioramento trovato (se migliora)
+        if improved && best_delta < 0
+            apply_2opt_move!(sol, best_i, best_j, dist)
+            stats.improvements += 1
+            push!(stats.objective_values, sol.objective)
+        end
+    end
+    
+    return sol
+end
+
+# First improvement 2-opt (CORRETTO)
+function first_improvement_2opt!(sol::TSPSolution, dist, stats::SearchStats)
+    improved = true
+    n = length(sol.route)
+    
+    while improved
+        improved = false
+        
+        for i in 1:(n-3)
+            for j in (i+2):(n-1)
+                stats.iterations += 1
+                delta = compute_delta(sol.route, dist, i, j)
+                
+                if delta < 0  # Primo miglioramento trovato
+                    apply_2opt_move!(sol, i, j, dist)
+                    improved = true
+                    stats.improvements += 1
+                    push!(stats.objective_values, sol.objective)
+                    break
+                end
+            end
+            if improved break end
+        end
+    end
+    
+    return sol
+end
+
+# Genera soluzione casuale
+function random_solution(dim::Int32)
+    sol = TSPSolution(dim)
+    sol.route = shuffle!([i for i in 1:dim])
+    return sol
+end
+
+# Calcola obiettivo per soluzione random
+function compute_route_objective!(sol::TSPSolution, dist)
+    n = length(sol.route)
+    obj = 0.0f0
+    for i in 1:(n-1)
+        obj += dist[sol.route[i], sol.route[i+1]]
+    end
+    obj += dist[sol.route[end], sol.route[1]]
+    sol.objective = obj
+    return sol
+end
+
+# Funzione di perturbazione per ILS (double bridge move)
+function double_bridge_perturbation!(sol::TSPSolution, dist)
+    n = length(sol.route)
+    
+    # Scegli 4 punti di taglio casuali
+    a = rand(2:div(n,4))
+    b = rand(a+1:div(n,3))
+    c = rand(b+1:div(n,2))
+    d = rand(c+1:n-1)
+    
+    # Double bridge move: A B C D → A C B D
+    route = sol.route
+    segment1 = route[1:a]
+    segment2 = route[a+1:b]
+    segment3 = route[b+1:c]
+    segment4 = route[c+1:d]
+    segment5 = route[d+1:end]
+    
+    new_route = vcat(segment1, segment4, segment3, segment2, segment5)
+    sol.route = new_route
+    
+    # Ricalcola obiettivo
+    compute_route_objective!(sol, dist)
+    
+    return sol
+end
+
+# Iterated Local Search
+function iterated_local_search(dist, dim, max_iterations::Int=100)
+    stats = SearchStats()
+    
+    # Genera soluzione iniziale (NN)
+    sol = nearest_neighbor_heuristic(dist, dim)
+    best_sol = deepcopy(sol)
+    
+    println("Soluzione iniziale NN: ", round(sol.objective, digits=2))
+    
+    for iter in 1:max_iterations
+        # Perturbazione
+        perturbed = deepcopy(sol)
+        double_bridge_perturbation!(perturbed, dist)
+        
+        # Ricerca locale (first improvement)
+        first_improvement_2opt!(perturbed, dist, stats)
+        
+        # Criterio di accettazione (miglioramento o probabilità)
+        if perturbed.objective < sol.objective
+            sol = deepcopy(perturbed)
+            if sol.objective < best_sol.objective
+                best_sol = deepcopy(sol)
+                println("Iterazione $iter: nuovo best = ", round(best_sol.objective, digits=2))
+            end
+        else
+            # Accetta con probabilità basata sul deterioramento
+            acceptance_prob = exp(-(perturbed.objective - sol.objective) / sol.objective)
+            if rand() < acceptance_prob
+                sol = deepcopy(perturbed)
+            end
+        end
+    end
+    
+    return best_sol, stats
+end
+
+# Funzione per eseguire e confrontare gli esperimenti
+function run_experiments(filename::String)
+    println("="^60)
+    println("ESPERIMENTI CON 2-OPT LOCAL SEARCH")
+    println("="^60)
+    
+    # Carica istanza
+    name, coord, dim = readInstance(filename)
+    dist = getDistanceMatrix(coord, dim)
+    
+    println("\nIstanza: $name, dimensioni: $dim città")
+    
+    # 1. PARTENZA DA EURISTICA COSTRUTTIVA
+    println("\n" * "-"^40)
+    println("1. PARTENZA DA NEAREST NEIGHBOR")
+    println("-"^40)
+    
+    sol_nn = nearest_neighbor_heuristic(dist, dim)
+    println("Soluzione iniziale NN: ", round(sol_nn.objective, digits=2))
+    
+    # Best improvement
+    stats_best = SearchStats()
+    sol_best = deepcopy(sol_nn)
+    time_best = @elapsed best_improvement_2opt!(sol_best, dist, stats_best)
+    println("\nBest Improvement 2-opt:")
+    println("  Obiettivo finale: ", round(sol_best.objective, digits=2))
+    println("  Miglioramento: ", round(100*(1 - sol_best.objective/sol_nn.objective), digits=2), "%")
+    println("  Iterazioni: ", stats_best.iterations)
+    println("  Miglioramenti applicati: ", stats_best.improvements)
+    println("  Tempo: ", round(time_best*1000, digits=2), " ms")
+    
+    # First improvement
+    stats_first = SearchStats()
+    sol_first = deepcopy(sol_nn)
+    time_first = @elapsed first_improvement_2opt!(sol_first, dist, stats_first)
+    println("\nFirst Improvement 2-opt:")
+    println("  Obiettivo finale: ", round(sol_first.objective, digits=2))
+    println("  Miglioramento: ", round(100*(1 - sol_first.objective/sol_nn.objective), digits=2), "%")
+    println("  Iterazioni: ", stats_first.iterations)
+    println("  Miglioramenti applicati: ", stats_first.improvements)
+    println("  Tempo: ", round(time_first*1000, digits=2), " ms")
+    
+    # 2. PARTENZA DA SOLUZIONE CASUALE
+    println("\n" * "-"^40)
+    println("2. PARTENZA DA SOLUZIONE CASUALE")
+    println("-"^40)
+    
+    # Media su 5 esecuzioni casuali
+    n_random_trials = 5
+    results_random = []
+    
+    for trial in 1:n_random_trials
+        sol_rand = random_solution(dim)
+        compute_route_objective!(sol_rand, dist)
+        println("\nProva $trial - Obiettivo iniziale: ", round(sol_rand.objective, digits=2))
+        
+        # Best improvement su random
+        stats_rand_best = SearchStats()
+        sol_rand_best = deepcopy(sol_rand)
+        time_rand_best = @elapsed best_improvement_2opt!(sol_rand_best, dist, stats_rand_best)
+        println("  Best improvement finale: ", round(sol_rand_best.objective, digits=2))
+        println("  Miglioramento: ", round(100*(1 - sol_rand_best.objective/sol_rand.objective), digits=2), "%")
+        println("  Iterazioni: ", stats_rand_best.iterations)
+        
+        # First improvement su random
+        stats_rand_first = SearchStats()
+        sol_rand_first = deepcopy(sol_rand)
+        time_rand_first = @elapsed first_improvement_2opt!(sol_rand_first, dist, stats_rand_first)
+        println("  First improvement finale: ", round(sol_rand_first.objective, digits=2))
+        println("  Iterazioni: ", stats_rand_first.iterations)
+        
+        push!(results_random, (sol_rand_best.objective, sol_rand_first.objective, 
+                               stats_rand_best.iterations, stats_rand_first.iterations))
+    end
+    
+    # Statistiche medie per partenza casuale
+    avg_best_obj = mean([r[1] for r in results_random])
+    avg_first_obj = mean([r[2] for r in results_random])
+    avg_best_iter = mean([r[3] for r in results_random])
+    avg_first_iter = mean([r[4] for r in results_random])
+    
+    println("\nMEDIE PARTENZA CASUALE:")
+    println("  Best improvement medio: ", round(avg_best_obj, digits=2))
+    println("  First improvement medio: ", round(avg_first_obj, digits=2))
+    println("  Iterazioni medie (Best): ", round(avg_best_iter, digits=2))
+    println("  Iterazioni medie (First): ", round(avg_first_iter, digits=2))
+    
+    # 3. ITERATED LOCAL SEARCH (senza modificare nulla rispetto alla richiesta)
+    println("\n" * "-"^40)
+    println("3. ITERATED LOCAL SEARCH")
+    println("-"^40)
+    
+    sol_ils, stats_ils = iterated_local_search(dist, dim, 50)
+    println("\nRisultati ILS:")
+    println("  Obiettivo finale: ", round(sol_ils.objective, digits=2))
+    println("  Miglioramento rispetto a NN: ", round(100*(1 - sol_ils.objective/sol_nn.objective), digits=2), "%")
+    
+    # Tabella comparativa finale
+    println("\n" * "="^60)
+    println("TABELLA COMPARATIVA FINALE")
+    println("="^60)
+    println("Metodo                         Obiettivo    Iterazioni    Tempo(ms)")
+    println("-"^60)
+    println("Nearest Neighbor (iniziale)    ", rpad(round(sol_nn.objective, digits=2), 12), "-            -")
+    println("NN + Best 2-opt                 ", rpad(round(sol_best.objective, digits=2), 12), 
+            rpad(stats_best.iterations, 12), round(time_best*1000, digits=2))
+    println("NN + First 2-opt                 ", rpad(round(sol_first.objective, digits=2), 12), 
+            rpad(stats_first.iterations, 12), round(time_first*1000, digits=2))
+    println("Random + Best (media)           ", rpad(round(avg_best_obj, digits=2), 12), 
+            rpad(round(avg_best_iter, digits=2), 12), "-")
+    println("Random + First (media)           ", rpad(round(avg_first_obj, digits=2), 12), 
+            rpad(round(avg_first_iter, digits=2), 12), "-")
+    println("ILS (50 iterazioni)              ", rpad(round(sol_ils.objective, digits=2), 12), 
+            rpad(stats_ils.iterations, 12), "-")
+    
+    return (sol_nn, sol_best, sol_first, results_random, sol_ils)
+end
+
+# Funzione mean per comodità
+mean(v) = sum(v)/length(v)
+
+# Esegui gli esperimenti
+println("\nINIZIO ESPERIMENTI...\n")
+results = run_experiments("tsp_toy.tsp")

@@ -163,7 +163,7 @@ end
 
 
 # ===========================
-# 4) LOCAL SEARCH (INSERTION) CON PRECEDENZE
+# 4) Insertion
 # ===========================
 
 # calcolo objective del PATH (non ciclo)
@@ -233,7 +233,40 @@ function insertion_local_search(inst::CTSPInstance, route::Vector{Int})
 end
 
 # ===========================
-# 6) 2-opt CON PRECEDENZE
+# 5) perturbation_insertion
+# ===========================
+
+function perturbation_insertion(route::Vector{Int},
+                                preds::Vector{Vector{Int}},
+                                K::Int)
+    pert = copy(route)
+    n = length(pert)
+
+    if n <= 3
+        return pert
+    end
+
+    for _ in 1:K
+        i = rand(2:n-1)     # non muovere start (1). goal (n) non viene scelto.
+        j = rand(2:n-1)     # destinazione interna
+        i == j && continue
+
+        cand = copy(pert)
+        node = cand[i]
+        deleteat!(cand, i)
+        insert!(cand, j, node)
+
+        if is_feasible_route(cand, preds)
+            pert = cand
+        end
+    end
+
+    return pert
+end
+
+
+# ===========================
+# 6) 2-opt 
 # ===========================
 function two_opt_local_search(inst::CTSPInstance, route::Vector{Int})
     best_route = copy(route)
